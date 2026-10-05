@@ -1,0 +1,9 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="proto.css"><script src="proto.js"></script><title>mint option A</title></head><body><div class="page">
+<div class="toolbar"><h1>A · One password, rules below</h1><button class="tt" onclick="setTheme('light')">Light</button><button class="tt" onclick="setTheme('dark')">Dark</button></div>
+<div class="bars" id="bars"></div><div class="stage"><div class="panel" id="p"></div></div></div>
+<script>initTheme();
+bars.innerHTML = ["ready","hover","copied","unset","failed"].map(bar).join("");
+p.innerHTML = hero({title:"Fresh password", meta:"Default · 156 bits · copy clears in 45 s"})
+ + pwBox({}) + '<div class="sep"></div><div class="sh">Rules</div>' + lengthRow() + chips() + presetRow()
+ + '<div class="sep"></div>' + actions() + footer();
+</script></body></html>

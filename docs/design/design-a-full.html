@@ -1,0 +1,86 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mint panel states</title><link rel="stylesheet" href="proto.css"><script src="proto.js"></script></head><body><div class="page">
+<div class="toolbar"><h1>omarchy-mint · every state</h1><button class="tt" onclick="setTheme('light')">Light</button><button class="tt" onclick="setTheme('dark')">Dark</button></div>
+<div class="bars" id="bars"></div>
+<div class="cards" id="cards"></div></div>
+<script>
+initTheme();
+bars.innerHTML = ["ready","hover","copied","unset","failed"].map(bar).join("");
+const P = inner => '<div class="stage"><div class="panel">' + inner + '</div></div>';
+const card = (t, why, inner) => '<div class="card"><h2>'+t+'</h2>'+inner+'<div class="why">'+why+'</div></div>';
+const main = [[G.refresh,"New"],[G.copy,"Copy","cur"],[G.vault,"Save"]];
+const keys = footer("enter copy · v show · ^r new · ^s save · esc");
+const S = [];
+
+S.push(card("Ready", "Opens with focus on Copy and a fresh password from mint. Hidden by default so an open panel never leaks it on a shared screen; the eye or v shows it. Enter copies and closes, the Copy button copies and stays open.",
+ P(hero2({title:"New password", meta:"24 characters · 141 bits"}) + pw2({}) + rules2() + '<div class="sep"></div>' + acts(main) + keys)));
+
+S.push(card("Shown", "The password in the panel's own font and colour, plain text. JetBrains Mono already separates 0 and O, l and 1.",
+ P(hero2({title:"New password", meta:"24 characters · 141 bits"}) + pw2({shown:true}) + rules2() + '<div class="sep"></div>' + acts(main) + keys)));
+
+S.push(card("Making a password", "Shown only if mint takes longer than a moment. The previous password is never reused.",
+ P(hero2({tone:"dim", title:"Making a password…", meta:"Asking mint", trailing:""}) + pw2({value:"", bits:"—", note:"—"}) + rules2() + '<div class="sep"></div>' + acts([[G.refresh,"New","dimmed"],[G.copy,"Copy","dimmed"],[G.vault,"Save","dimmed"]]))));
+
+S.push(card("Copied", "Copied with the sensitive hint, so Omarchy's clipboard history skips it. The bar glyph turns accent until the clear. Reopening the panel during the countdown returns here with the same password.",
+ P(hero2({icon:G.check, tone:"ok", title:"Copied", pill:"clears in 38 s", meta:"Kept out of clipboard history"}) + pw2({}) + rules2() + '<div class="sep"></div>' + acts([[G.refresh,"New"],[G.check,"Copied","cur"],[G.vault,"Save"]]) + keys)));
+
+S.push(card("Site rule", "A site rule (Moneris: 10 to 16 characters, three classes) is one choice. mint uses the top of a range; the caption states the rule so it can be checked against the site's wording.",
+ P(hero2({title:"New password", meta:"Moneris · 16 characters · 91 bits"}) + pw2({value:SAMPLE16, bits:91, len:16}) + rules2({n:16, preset:"Moneris · 10 to 16, 3 classes", rule:"16 of 10–16 · 3 classes"}) + '<div class="sep"></div>' + acts(main) + keys)));
+
+S.push(card("Rule can't be met", "mint exit 3. No password is shown, so nothing stale can be copied. Copy and Save return when a class is switched back on.",
+ P(hero2({icon:G.alert, tone:"bad", title:"No password fits these rules", meta:"Moneris needs 3 classes · 2 are on"}) +
+ '<div class="err warn"><b>Switch on one more character type.</b><p>Moneris needs three of capitals, lower case, digits and symbols.</p></div>' +
+ rules2({n:16, on:["a–z","0–9"], cur:0, preset:"Moneris · 10 to 16, 3 classes", rule:"16 of 10–16 · 3 classes"}) + '<div class="sep"></div>' + acts([[G.refresh,"New","dimmed"],[G.copy,"Copy","dimmed"],[G.vault,"Save","dimmed"]]))));
+
+S.push(card("Save to 1Password", "Save swaps the rules for a short form. Title is required. The password shown is the one saved: it reaches mint over a pipe, never a command line, so it matches what may already be on the clipboard.",
+ P(hero2({icon:G.vault, title:"Save to 1Password", meta:"New login · 24 characters", trailing:G.back}) + pw2({}) +
+ '<div class="sep"></div><div class="sh">Save as</div>' + ctlField("Title","Moneris",{focus:true}) + ctlDrop("Vault","Private") +
+ ctlField("Website","",{ph:"https://example.com"}) + ctlField("Username","",{ph:"Optional"}) + '<div class="sep"></div>' +
+ acts([[G.back,"Back"],[G.vault,"Save","cur"]]) + footer("enter save · esc back"))));
+
+S.push(card("Loading vaults", "The vault list comes from 1Password and can take a moment. The form is usable meanwhile; Save waits for the list.",
+ P(hero2({icon:G.vault, title:"Save to 1Password", meta:"New login · 24 characters", trailing:G.back}) +
+ '<div class="sep"></div><div class="sh">Save as</div>' + ctlField("Title","Moneris") + ctlDrop("Vault",'<span class="ph">Loading vaults…</span>') +
+ '<div class="sep"></div>' + acts([[G.back,"Back"],[G.vault,"Save","dimmed"]]))));
+
+S.push(card("Saving", "1Password may ask for approval. The form locks; Esc or Cancel stops the request.",
+ P(hero2({icon:G.vault, tone:"dim", title:"Saving to Private…", meta:"Approve in 1Password if it asks", trailing:""}) + pw2({}) +
+ '<div class="sep"></div>' + acts([[G.back,"Cancel"],[G.vault,"Saving…","dimmed"]]))));
+
+S.push(card("1Password hasn't answered", "After 30 seconds with no answer, usually an approval prompt on another screen or a locked app. The request keeps waiting until Cancel or 2 minutes.",
+ P(hero2({icon:G.vault, tone:"dim", title:"1Password hasn't answered", meta:"Waiting 34 s", trailing:""}) +
+ '<div class="err warn"><b>Check for a 1Password approval prompt.</b><p>Unlock 1Password if it is locked; the save carries on by itself.</p></div>' +
+ acts([[G.back,"Cancel","cur"]]))));
+
+S.push(card("Saved", "Confirms by title and vault. The saved password is copied too (sensitive, clearing) so it can go straight into the site's form.",
+ P(hero2({icon:G.check, tone:"ok", title:"Saved to 1Password", pill:"copied", meta:"Moneris · Private · clears in 42 s"}) + pw2({}) +
+ '<div class="sep"></div>' + acts([[G.open,"Open in 1Password"],[G.refresh,"New password","cur"]]))));
+
+S.push(card("1Password locked", "mint exit 4. The form keeps what was typed.",
+ P(hero2({icon:G.alert, tone:"bad", title:"Couldn't save to 1Password", meta:"Nothing was saved"}) +
+ '<div class="err"><b>1Password is locked.</b><p>Unlock the 1Password app, then press Save again.</p><code>op vault list</code></div>' +
+ ctlField("Title","Moneris") + ctlDrop("Vault","Private") + acts([[G.back,"Back"],[G.vault,"Try again","cur"]]))));
+
+S.push(card("Couldn't make a password", "mint failed or answered with something unreadable (exit 2 or bad output). The bar glyph turns urgent with a !.",
+ P(hero2({icon:G.alert, tone:"bad", title:"Couldn't make a password", meta:"mint stopped with an error"}) +
+ '<div class="err"><b>mint didn\'t return a password.</b><p>Try again. If it keeps failing, run mint in a terminal to see why.</p><code>mint --json</code></div>' +
+ acts([[G.refresh,"Try again","cur"]]))));
+
+S.push(card("Couldn't copy", "mint exit 5 or wl-copy failed. The password stays on screen so it can be copied by hand.",
+ P(hero2({icon:G.alert, tone:"bad", title:"Couldn't copy", meta:"Clipboard unavailable"}) +
+ '<div class="err"><b>The clipboard didn\'t take it.</b><p>Show the password and copy it by hand, or install wl-clipboard.</p></div>' + pw2({}) +
+ acts([[G.eye,"Show"],[G.copy,"Try again","cur"]]))));
+
+S.push(card("mint not installed", "Dim, never urgent: a fresh install must not shout.",
+ P(hero2({tone:"dim", title:"Install mint to make passwords", meta:"Not set up", trailing:""}) +
+ '<div class="err info"><b>This widget needs the mint app.</b><p>Install it, then open this panel again.</p><code>github.com/steveclarke/mint</code></div>' +
+ acts([[G.open,"Install guide","cur"]]))));
+
+S.push(card("Settings", "From the gear. Saved to the shell's own config.",
+ P(hero2({icon:G.gear, title:"mint settings", meta:"Bar widget", trailing:G.back}) + '<div class="sep"></div>' +
+ '<div class="ctl"><div class="cap"><span>Clear the clipboard after</span><b>0 never clears</b></div><div class="num" style="width:120px"><span>45 s</span><span>'+G.down+'</span></div></div>' +
+ ctlDrop("Default site rule","None") + ctlDrop("Default vault","Private") +
+ '<div class="tog"><div><div>Show the password on open</div><div class="d">Off keeps it hidden until v or the eye</div></div><div class="sw"></div></div>')));
+
+cards.innerHTML = S.join("");
+</script></body></html>
