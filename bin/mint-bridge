@@ -1,0 +1,305 @@
+#!/usr/bin/python3 -I
+"""Bounded stdin/stdout bridge. No persistent state or secret command arguments."""
+import json
+import os
+import re
+import selectors
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+LIMIT = 65536
+TIMEOUT = 20
+MESSAGES = {
+    'invalid': 'The request is invalid.',
+    'missing': 'A required command is not installed.',
+    'timeout': 'The command took too long.',
+    'overflow': 'The command returned too much data.',
+    'failed': 'The command failed. Check its installation and permissions.',
+    'clipboard': 'Sensitive clipboard copy failed. wl-clipboard 2.3 or later is required.',
+    'response': 'The command returned an invalid response.',
+}
+
+class Failure(Exception):
+    def __init__(self, kind):
+        self.kind = kind
+
+
+def environment():
+    keys = ('HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY',
+            'DBUS_SESSION_BUS_ADDRESS', 'MINT_OP', 'MINT_BINARY')
+    env = {key: os.environ[key] for key in keys if key in os.environ}
+    env.update(PATH='/usr/bin:/bin', LANG='C.UTF-8')
+    return env
+
+
+def binary(key, default):
+    value = os.environ.get(key)
+    if value is None:
+        name = os.path.basename(default)
+        value = shutil.which(name)
+        if value is None and key == 'MINT_BINARY':
+            candidate = os.path.expanduser('~/.local/bin/mint')
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                value = candidate
+        value = value or default
+    if not os.path.isabs(value) or '\x00' in value:
+        raise Failure('invalid')
+    return value
+
+
+def run(argv, payload=b'', timeout=TIMEOUT):
+    """Drain at most LIMIT+1 bytes per stream; deadline includes stdin writes."""
+    try:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=environment(), start_new_session=True)
+    except FileNotFoundError:
+        raise Failure('missing')
+    except OSError:
+        raise Failure('failed')
+    buffers = {'out': bytearray(), 'err': bytearray()}
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+    pending = memoryview(payload)
+    for pipe, name in ((proc.stdout, 'out'), (proc.stderr, 'err')):
+        os.set_blocking(pipe.fileno(), False)
+        selector.register(pipe, selectors.EVENT_READ, name)
+    if pending:
+        os.set_blocking(proc.stdin.fileno(), False)
+        selector.register(proc.stdin, selectors.EVENT_WRITE, 'in')
+    else:
+        proc.stdin.close()
+    completed = False
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise Failure('timeout')
+            for key, _ in selector.select(remaining):
+                if key.data == 'in':
+                    try:
+                        pending = pending[os.write(key.fd, pending[:4096]):]
+                    except BrokenPipeError:
+                        pending = memoryview(b'')
+                    if not pending:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                else:
+                    buf = buffers[key.data]
+                    chunk = os.read(key.fd, min(4096, LIMIT + 1 - len(buf)))
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                    else:
+                        buf.extend(chunk)
+                        if len(buf) > LIMIT:
+                            raise Failure('overflow')
+        try:
+            code = proc.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            raise Failure('timeout')
+        if code:
+            raise Failure('failed')
+        completed = True
+        return bytes(buffers['out'])
+    finally:
+        selector.close()
+        if not completed:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            pipe.close()
+
+
+def text_field(request, name, maximum=256, required=False):
+    value = request.get(name, '')
+    if not isinstance(value, str) or len(value) > maximum or any(ord(c) < 32 for c in value):
+        raise Failure('invalid')
+    if required and not value.strip():
+        raise Failure('invalid')
+    return value
+
+
+def generation(request):
+    args = []
+    if 'length' in request:
+        value = request['length']
+        if isinstance(value, int) and not isinstance(value, bool):
+            value = str(value)
+        if not isinstance(value, str) or not re.fullmatch(r'[1-9][0-9]{0,3}(-[1-9][0-9]{0,3})?', value):
+            raise Failure('invalid')
+        bounds = [int(v) for v in value.split('-')]
+        if max(bounds) > 4096 or bounds[0] > bounds[-1]:
+            raise Failure('invalid')
+        args.append(value)
+    if 'preset' in request:
+        preset = text_field(request, 'preset', 128)
+        if preset:
+            args.append('--preset=' + preset)
+    if 'classes' in request:
+        classes = request['classes']
+        allowed = ['upper', 'lower', 'digits', 'symbols']
+        if not isinstance(classes, list) or not 1 <= len(classes) <= 4 or any(c not in allowed for c in classes) or len(set(classes)) != len(classes):
+            raise Failure('invalid')
+        args.extend('--no-' + c for c in allowed if c not in classes)
+    if 'symbols' in request:
+        symbols = text_field(request, 'symbols', 128)
+        if 'classes' not in request or 'symbols' in request['classes']:
+            args.append('--symbols=' + symbols)
+    if 'noAmbiguous' in request:
+        if type(request['noAmbiguous']) is not bool:
+            raise Failure('invalid')
+        if request['noAmbiguous']:
+            args.append('--no-ambiguous')
+    return args
+
+
+def delay(request):
+    seconds = request.get('clearAfter', 45)
+    if type(seconds) is not int or not 0 <= seconds <= 3600:
+        raise Failure('invalid')
+    return seconds
+
+
+def parse(raw):
+    try:
+        return json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        raise Failure('response')
+
+
+def clear_later(secret, seconds):
+    time.sleep(seconds)
+    if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
+        run(['/usr/bin/wl-copy', '--clear'])
+
+
+def copy_password(request):
+    secret = text_field(request, 'password', 4096, True).encode('utf-8')
+    seconds = delay(request)
+    try:
+        run(['/usr/bin/wl-copy', '--sensitive'], secret)
+        if seconds == 0:
+            return {'copied': True, 'clears_after': None}
+        child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', os.path.abspath(__file__),
+                                  '__clear', str(seconds)], stdin=subprocess.PIPE,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 env=environment(), start_new_session=True)
+        with child.stdin:
+            child.stdin.write(secret)
+    except (Failure, OSError):
+        # An unscheduled secret is removed only while it is still the same value.
+        try:
+            if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
+                run(['/usr/bin/wl-copy', '--clear'])
+        except Failure:
+            pass
+        raise Failure('clipboard')
+    return {'copied': True, 'clears_after': seconds}
+
+
+def dispatch(request):
+    if not isinstance(request, dict):
+        raise Failure('invalid')
+    operation = request.get('operation')
+    generation_keys = {'length', 'classes', 'preset', 'symbols', 'noAmbiguous'}
+    keys = {'generate': generation_keys, 'presets': set(), 'vaults': set(),
+            'copy': {'password', 'clearAfter'},
+            'save': generation_keys | {'title', 'vault', 'url', 'username', 'clearAfter'}}
+    if not isinstance(operation, str) or operation not in keys or set(request) - keys[operation] - {'operation'}:
+        raise Failure('invalid')
+    if operation == 'copy':
+        return copy_password(request)
+    if operation == 'vaults':
+        result = parse(run([binary('MINT_OP', '/usr/bin/op'), 'vault', 'list', '--format', 'json']))
+        if not isinstance(result, list) or len(result) > 100:
+            raise Failure('response')
+        vaults = []
+        for item in result:
+            if not isinstance(item, dict):
+                raise Failure('response')
+            vaults.append({'id': text_field(item, 'id', 128, True), 'name': text_field(item, 'name', 256, True)})
+        return vaults
+    command = [binary('MINT_BINARY', '/usr/bin/mint')]
+    if operation == 'presets':
+        command += ['presets', '--json']
+    else:
+        if operation == 'save':
+            delay(request)  # Validate before the irreversible save.
+            command += ['save', '--show']
+            for key in ('title', 'vault', 'url', 'username'):
+                value = text_field(request, key, 2048 if key == 'url' else 256, key == 'title')
+                if value:
+                    command.append('--' + key + '=' + value)
+        command += ['--json'] + generation(request)
+    result = parse(run(command, timeout=120 if operation == 'save' else TIMEOUT))
+    if operation == 'presets':
+        if not isinstance(result, list) or len(result) > 100:
+            raise Failure('response')
+        if any(not isinstance(item, dict) for item in result):
+            raise Failure('response')
+        return [{key: text_field(item, key, 512, key == 'name') for key in ('name', 'description', 'summary', 'source')} for item in result]
+    if not isinstance(result, dict) or not isinstance(result.get('password'), str) or not 1 <= len(result['password']) <= 4096:
+        raise Failure('response')
+    if operation == 'save':
+        try:
+            copy_password({'password': result['password'], 'clearAfter': delay(request)})
+            result['copied'] = True
+        except Failure:
+            # The new item already exists even when clipboard access fails.
+            result['copied'] = False
+    return result
+
+
+def read_request():
+    data = bytearray()
+    deadline = time.monotonic() + 5
+    with selectors.DefaultSelector() as selector:
+        selector.register(sys.stdin.buffer, selectors.EVENT_READ)
+        while len(data) <= LIMIT:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise Failure('timeout')
+            chunk = os.read(sys.stdin.fileno(), min(4096, LIMIT + 1 - len(data)))
+            if not chunk:
+                return bytes(data)
+            data.extend(chunk)
+    raise Failure('overflow')
+
+
+def main():
+    try:
+        raw = read_request()
+        if len(raw) > LIMIT:
+            raise Failure('overflow')
+        if len(sys.argv) == 3 and sys.argv[1] == '__clear':
+            seconds = int(sys.argv[2])
+            if not 1 <= seconds <= 3600 or len(raw) > 16384:
+                return
+            clear_later(raw, seconds)
+            return
+        if len(sys.argv) != 1:
+            raise Failure('invalid')
+        result = {'ok': True, 'data': dispatch(parse(raw))}
+        encoded = json.dumps(result, ensure_ascii=True)
+        if len(encoded.encode()) > LIMIT:
+            raise Failure('overflow')
+    except Failure as error:
+        encoded = json.dumps({'ok': False, 'kind': error.kind, 'error': MESSAGES[error.kind]})
+    except Exception:
+        encoded = json.dumps({'ok': False, 'kind': 'failed', 'error': MESSAGES['failed']})
+    if len(sys.argv) == 1:
+        print(encoded)
+
+def interrupted(_signum, _frame):
+    raise Failure('failed')
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    main()

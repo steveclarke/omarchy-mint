@@ -1,0 +1,5 @@
+const {test}=require('node:test');const assert=require('node:assert/strict');const M=require('../Model.js');
+test('preferences clamp hostile settings and honor CLI strings',()=>{assert.equal(M.preferences({clearAfter:'0'}).clearAfter,0);assert.equal(M.preferences({clearAfter:Infinity}).clearAfter,45);assert.equal(M.preferences({clearAfter:900000}).clearAfter,3600)});
+test('password response needs bounded explicit metadata',()=>{assert.throws(()=>M.password({password:'x',length:1,entropy_bits:Infinity}));assert.throws(()=>M.password({password:'x\n',length:2,entropy_bits:1}));assert.equal(M.password({password:'<>&',length:3,entropy_bits:4}).password,'<>&')});
+test('metadata strips markup while option identity stays exact',()=>{assert.equal(M.clean('<b>abc&'), 'babc');assert.deepEqual(M.options([{name:'a&b'}],'preset'),[{value:'a&b',label:'ab'}])});
+test('oversized malformed responses fail closed',()=>{assert.throws(()=>M.parse('x'.repeat(65537)));assert.throws(()=>M.parse('{}'));assert.throws(()=>M.options(Array(257).fill({name:'x'}),'preset'))});
