@@ -24,4 +24,24 @@
 
 - [Unlocked desktop checks](https://github.com/steveclarke/omarchy-mint/issues/1), dated 2026-10-05.
 - [Real save and cleanup proof](https://github.com/steveclarke/omarchy-mint/issues/2), dated 2026-10-05.
-- [Linux toggle and Arch packaging](https://github.com/steveclarke/mint/pull/4) remains a draft until unlocked-session validation.
+- [Linux toggle and Arch packaging](https://github.com/steveclarke/mint/pull/4): source readiness is independent of pending installation proof.
+
+## Review repair evidence — 2026-10-05
+
+- Mint source: `4d545c8`; shared stdin copy, fixed Wayland executable paths, bounded I/O and acknowledged clearer startup.
+- Bridge: 18 stubbed tests pass; no production executable override hooks.
+- Model: six tests pass, including DEL, C1 and bidi controls across labels, identities and passwords.
+- Offscreen Quickshell: 11 cases pass, including busy-preview refusal, cancelled-save uncertainty and preview-state cycling.
+- Native component loading, manifest validation and QML lint pass.
+- Grep audit: runtime text sinks explicitly use PlainText; host labels use fixed or cleaned strings; output collection and filesystem-write hits belong to test/tooling code. No network or privilege-command matches in the scanned plugin tree.
+- Preview: the existing 612 × 757 capture contains the demo banner. The final capture from the live installed panel without the banner remains pending installation.
+- Installed repair, package/chroot proof, full live-state sweep and real-item save/delete proof remain pending.
+
+## Source follow-up evidence — 2026-10-05
+
+- Copy failures retain the bridge's missing-command, timeout, overflow, process-failure and response classes. Mint JSON stderr contributes only known kind/exit-code pairs; messages are fixed, with no stderr or secret echo.
+- Bridge: 22 stubbed tests pass, including missing Mint, all copy failure classes, malformed success responses and hostile JSON stderr.
+- Model: six tests pass. Offscreen Quickshell: 11 cases pass; native components, manifest validation and QML lint pass.
+- Grep audit: every git-tracked file is scanned, with positive controls and no depth or size exclusions. QML text sinks have explicit formats; host labels are fixed or cleaned. Filesystem-write and whole-output collection matches belong to tests and tooling. Network and privilege patterns have no matches in this scope.
+- Final preview: pending installation; the existing demo-banner capture does not satisfy the final-preview requirement.
+- Installation proof: package/chroot checks, StartupWMClass, updated-plugin live states and real-item save/delete remain pending.

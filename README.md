@@ -2,13 +2,13 @@
 
 - Password generation through [Mint](https://github.com/steveclarke/mint).
 - Length, character classes, allowed symbols and named site rules.
-- Sensitive clipboard copies with conditional clearing after 45 seconds.
+- Sensitive clipboard copies through Mint with conditional clearing after 45 seconds.
 - New Login creation through Mint and 1Password CLI.
 - Native Quattro controls, keyboard actions and shared state across monitors.
 
 ## Installation
 
-1. Install Mint and `wl-clipboard` 2.3 or newer. Both `mint` and `mint-app` belong on PATH.
+1. Install Mint from its Arch PKGBUILD and `wl-clipboard` 2.3 or newer. The plugin uses `/usr/bin/mint` (including `mint copy`) and `/usr/bin/op` for 1Password; the window app is optional.
 2. Run `omarchy plugin add https://github.com/steveclarke/omarchy-mint --enable`.
 3. Run `omarchy restart shell`.
 
@@ -46,3 +46,6 @@
 - `omarchy-shell io.github.steveclarke.mint debugState ready` enables a fixed preview; preview actions cannot launch processes.
 - `omarchy-shell io.github.steveclarke.mint debugState off` returns to normal operation.
 - Diagnostics report state and password presence, never password content.
+
+- Executable selection uses fixed system paths; PATH and Mint/op environment overrides cannot replace the commands.
+- Preview state changes are refused during real requests and while a real save remains unconfirmed.

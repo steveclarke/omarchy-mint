@@ -8,7 +8,7 @@ with tempfile.TemporaryDirectory(prefix='mint-qml-') as directory:
  for name in ('Request.qml','Model.js','Service.qml'): shutil.copyfile(source/name,root/name)
  (root/'bin').mkdir();runtime=root/'runtime';runtime.mkdir(mode=0o700)
  env=dict(os.environ,QT_QPA_PLATFORM='offscreen',QT_QPA_PLATFORMTHEME='',XDG_RUNTIME_DIR=str(runtime),MINT_OP='/usr/bin/false');env.pop('WAYLAND_DISPLAY',None);env.pop('DISPLAY',None)
- for mode in ('valid','invalid','oversized','stderr','cancel','service','demo','owner'):
+ for mode in ('valid','invalid','oversized','stderr','cancel','service','demo','owner','busy-preview','uncertain-preview','demo-cycle'):
   script='import json,sys,time\nr=json.load(sys.stdin)\n'
   if mode=='invalid':script+='print("not-json")\n'
   elif mode=='oversized':script+='print("x"*70000)\n'
@@ -17,7 +17,13 @@ with tempfile.TemporaryDirectory(prefix='mint-qml-') as directory:
   elif mode=='demo':script+='raise Exception("Demo launched a subprocess")\n'
   else:script+='print(json.dumps({"ok":True,"data":[{"name":"pin6"}]} if r.get("operation")=="presets" else {"ok":True,"data":{"password":"fixture-only","length":12,"entropy_bits":32,"rule":{"summary":"fixture"}}}))\n'
   (root/'bin/mint-bridge').write_text(script)
-  if mode=='owner':
+  if mode=='busy-preview':
+   body='Service {id:s} Timer {interval:50;running:true;onTriggered:{s.busy=true;s.action="save";s.secret="fixture";var generation=s.generation;s.debugState("ready");s.debugState("off");if(!s.busy || s.demo || s.secret!=="fixture" || s.generation!==generation) Qt.exit(2);else {console.log("PASS");Qt.quit()}}}'
+  elif mode=='uncertain-preview':
+   body='Service {id:s} Timer {interval:50;running:true;onTriggered:{s.busy=true;s.action="save";s.cancel();s.debugState("ready");s.debugState("off");s.save("test","stub","","");if(!s.saveUncertain || s.demo || s.busy || s.activeRequest) Qt.exit(2);else {console.log("PASS");Qt.quit()}}}'
+  elif mode=='demo-cycle':
+   body='Service {id:s} Timer {interval:50;running:true;onTriggered:{s.debugState("saving");s.debugState("uncertain");s.debugState("off");if(s.demo || s.busy || s.saveUncertain || s.activeRequest) Qt.exit(2);else {console.log("PASS");Qt.quit()}}}'
+  elif mode=='owner':
    body='Service {id:s} Timer {interval:50;running:true;onTriggered:{var a={close:function(){s.closePanel(a)}};var b={close:function(){s.closePanel(b)}};s.busy=true;s.action="save";s.secret="fixture-only";s.openPanel(a);s.openPanel(b);if(!s.busy || s.secret!=="fixture-only" || s.panelOwner!==b) {Qt.exit(2);return} s.closePanel(b);if(s.busy || s.secret || !s.saveUncertain) Qt.exit(2);else {console.log("PASS");Qt.quit()}}}'
   elif mode=='service':
    body='Service {id:s} Component.onCompleted:{s.generate()} Timer {interval:600;running:true;onTriggered:{if(s.health!=="ready" || s.secret!=="fixture-only" || s.presets.length!==2) Qt.exit(2);else {console.log("PASS");Qt.quit()}}}'

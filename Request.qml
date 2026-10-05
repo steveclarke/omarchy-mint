@@ -35,7 +35,8 @@ Item {
   Component.onDestruction: cancel()
   Timer {
     id: deadline
-    interval: 130000
+    // Bridge: 5 s input + 120 s save + 35 s copy, with cleanup margin.
+    interval: 170000
     onTriggered: root.reject()
   }
   Process {

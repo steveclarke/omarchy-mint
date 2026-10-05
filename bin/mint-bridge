@@ -4,7 +4,6 @@ import json
 import os
 import re
 import selectors
-import shutil
 import signal
 import subprocess
 import sys
@@ -12,13 +11,19 @@ import time
 
 LIMIT = 65536
 TIMEOUT = 20
+COPY_TIMEOUT = 35
+MINT = "/usr/bin/mint"
+OP = "/usr/bin/op"
 MESSAGES = {
     'invalid': 'The request is invalid.',
     'missing': 'A required command is not installed.',
     'timeout': 'The command took too long.',
     'overflow': 'The command returned too much data.',
     'failed': 'The command failed. Check its installation and permissions.',
-    'clipboard': 'Sensitive clipboard copy failed. wl-clipboard 2.3 or later is required.',
+    'clipboard': 'Sensitive clipboard copy failed. Check the Wayland session and wl-clipboard 2.3 or later.',
+    'usage': 'Mint rejected the copy input or settings. Check the clipboard settings and try again.',
+    'unsatisfiable': 'Mint could not satisfy the password rules. Change the rules and try again.',
+    'onepassword': '1Password failed. Check its installation and approval, then try again.',
     'response': 'The command returned an invalid response.',
 }
 
@@ -29,28 +34,13 @@ class Failure(Exception):
 
 def environment():
     keys = ('HOME', 'XDG_CONFIG_HOME', 'XDG_RUNTIME_DIR', 'WAYLAND_DISPLAY',
-            'DBUS_SESSION_BUS_ADDRESS', 'MINT_OP', 'MINT_BINARY')
+            'DBUS_SESSION_BUS_ADDRESS')
     env = {key: os.environ[key] for key in keys if key in os.environ}
-    env.update(PATH='/usr/bin:/bin', LANG='C.UTF-8')
+    env.update(PATH='/usr/bin:/bin', LANG='C.UTF-8', MINT_OP=OP)
     return env
 
 
-def binary(key, default):
-    value = os.environ.get(key)
-    if value is None:
-        name = os.path.basename(default)
-        value = shutil.which(name)
-        if value is None and key == 'MINT_BINARY':
-            candidate = os.path.expanduser('~/.local/bin/mint')
-            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-                value = candidate
-        value = value or default
-    if not os.path.isabs(value) or '\x00' in value:
-        raise Failure('invalid')
-    return value
-
-
-def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
+def run(argv, payload=b'', timeout=TIMEOUT, capture=True, mint_errors=False):
     """Drain at most LIMIT+1 bytes per stream; deadline includes stdin writes."""
     try:
         output = subprocess.PIPE if capture else subprocess.DEVNULL
@@ -103,6 +93,8 @@ def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
         except subprocess.TimeoutExpired:
             raise Failure('timeout')
         if code:
+            if mint_errors:
+                raise Failure(mint_failure(buffers['err'], code))
             raise Failure('failed')
         completed = True
         return bytes(buffers['out'])
@@ -119,9 +111,24 @@ def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
                 pipe.close()
 
 
+def mint_failure(raw, code):
+    """Only a known kind/code pair crosses the boundary; stderr text never does."""
+    try:
+        error = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        return 'failed'
+    kinds = {'usage': 2, 'unsatisfiable': 3, 'onepassword': 4, 'clipboard': 5}
+    if not isinstance(error, dict):
+        return 'failed'
+    kind = error.get('kind')
+    if isinstance(kind, str) and kind in kinds and type(error.get('code')) is int and error['code'] == code == kinds[kind]:
+        return kind
+    return 'failed'
+
+
 def text_field(request, name, maximum=256, required=False):
     value = request.get(name, '')
-    if not isinstance(value, str) or len(value) > maximum or any(ord(c) < 32 for c in value):
+    if not isinstance(value, str) or len(value) > maximum or any(ord(c) < 32 or 127 <= ord(c) <= 159 or ord(c) in (0x061c, 0x200e, 0x200f) or 0x202a <= ord(c) <= 0x202e or 0x2066 <= ord(c) <= 0x2069 for c in value):
         raise Failure('invalid')
     if required and not value.strip():
         raise Failure('invalid')
@@ -176,63 +183,6 @@ def parse(raw):
         raise Failure('response')
 
 
-def clear_later(secret, seconds):
-    time.sleep(seconds)
-    if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
-        run(['/usr/bin/wl-copy', '--clear'], capture=False)
-
-
-def handoff(proc, payload, timeout=5):
-    """Bound the detached clearer's stdin handoff and reap it on cancellation."""
-    completed = False
-    pending = memoryview(payload)
-    deadline = time.monotonic() + timeout
-    try:
-        os.set_blocking(proc.stdin.fileno(), False)
-        with selectors.DefaultSelector() as selector:
-            selector.register(proc.stdin, selectors.EVENT_WRITE)
-            while pending:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or not selector.select(remaining):
-                    raise Failure('timeout')
-                pending = pending[os.write(proc.stdin.fileno(), pending[:4096]):]
-        proc.stdin.close()
-        if proc.poll() not in (None, 0):
-            raise Failure('clipboard')
-        completed = True
-    finally:
-        proc.stdin.close()
-        if not completed:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.wait()
-
-
-def copy_password(request):
-    secret = text_field(request, 'password', 4096, True).encode('utf-8')
-    seconds = delay(request)
-    try:
-        run(['/usr/bin/wl-copy', '--sensitive'], secret, capture=False)
-        if seconds == 0:
-            return {'copied': True, 'clears_after': None}
-        child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', os.path.abspath(__file__),
-                                  '__clear', str(seconds)], stdin=subprocess.PIPE,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 env=environment(), start_new_session=True)
-        handoff(child, secret)
-    except (Failure, OSError):
-        # An unscheduled secret is removed only while it is still the same value.
-        try:
-            if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
-                run(['/usr/bin/wl-copy', '--clear'], capture=False)
-        except Failure:
-            pass
-        raise Failure('clipboard')
-    return {'copied': True, 'clears_after': seconds}
-
-
 def dispatch(request):
     if not isinstance(request, dict):
         raise Failure('invalid')
@@ -244,9 +194,15 @@ def dispatch(request):
     if not isinstance(operation, str) or operation not in keys or set(request) - keys[operation] - {'operation'}:
         raise Failure('invalid')
     if operation == 'copy':
-        return copy_password(request)
+        secret = text_field(request, 'password', 4096, True).encode('utf-8')
+        seconds = delay(request)
+        result = parse(run([MINT, 'copy', '--json', '--clear-after', str(seconds)], secret,
+                           timeout=COPY_TIMEOUT, mint_errors=True))
+        if not isinstance(result, dict) or result.get('copied') is not True or result.get('clears_after') != (seconds or None):
+            raise Failure('response')
+        return result
     if operation == 'vaults':
-        result = parse(run([binary('MINT_OP', '/usr/bin/op'), 'vault', 'list', '--format', 'json']))
+        result = parse(run([OP, 'vault', 'list', '--format', 'json']))
         if not isinstance(result, list) or len(result) > 100:
             raise Failure('response')
         vaults = []
@@ -255,7 +211,7 @@ def dispatch(request):
                 raise Failure('response')
             vaults.append({'id': text_field(item, 'id', 128, True), 'name': text_field(item, 'name', 256, True)})
         return vaults
-    command = [binary('MINT_BINARY', '/usr/bin/mint')]
+    command = [MINT]
     if operation == 'presets':
         command += ['presets', '--json']
     else:
@@ -278,7 +234,7 @@ def dispatch(request):
         raise Failure('response')
     if operation == 'save':
         try:
-            copy_password({'password': result['password'], 'clearAfter': delay(request)})
+            dispatch({'operation': 'copy', 'password': result['password'], 'clearAfter': delay(request)})
             result['copied'] = True
         except Failure:
             # The new item already exists even when clipboard access fails.
@@ -307,12 +263,6 @@ def main():
         raw = read_request()
         if len(raw) > LIMIT:
             raise Failure('overflow')
-        if len(sys.argv) == 3 and sys.argv[1] == '__clear':
-            seconds = int(sys.argv[2])
-            if not 1 <= seconds <= 3600 or len(raw) > 16384:
-                return
-            clear_later(raw, seconds)
-            return
         if len(sys.argv) != 1:
             raise Failure('invalid')
         result = {'ok': True, 'data': dispatch(parse(raw))}
