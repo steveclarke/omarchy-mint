@@ -211,10 +211,12 @@ Item {
     health = secret ? "ready" : "idle";
   }
   function debugState(name) {
+    if (!demo && (busy || saveUncertain))
+      return;
     if (["off", "ready", "copied", "saved", "copy-failed", "missing", "failed", "uncertain", "generating", "saving", "vaults"].indexOf(name) < 0)
       return;
-    cancel();
     discard();
+    busy = false;
     demo = name !== "off";
     saveUncertain = false;
     if (!demo) {

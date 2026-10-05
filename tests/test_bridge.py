@@ -14,6 +14,9 @@ loader = importlib.machinery.SourceFileLoader('bridge', str(BRIDGE))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 bridge = importlib.util.module_from_spec(spec)
 loader.exec_module(bridge)
+# Tests replace constants in the imported module, never production environment hooks.
+bridge.OP = '/usr/bin/false'
+os.environ['MINT_OP'] = '/usr/bin/false'
 
 
 class BridgeTests(unittest.TestCase):
@@ -25,9 +28,9 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0][1:], ['--json', '10-16', '--no-upper', '--no-symbols', '--no-ambiguous'])
 
     def test_save_new_password_no_existing_secret(self):
-        with patch.object(bridge, 'run', return_value=b'{"password":"new"}') as run, patch.object(bridge, 'copy_password', return_value={'copied': True}):
+        with patch.object(bridge, 'run', side_effect=[b'{"password":"new"}', b'{"copied":true,"clears_after":45}']) as run:
             bridge.dispatch({'operation': 'save', 'title': '--item=other', 'vault': 'Test', 'length': 24})
-        args = run.call_args.args[0]
+        args = run.call_args_list[0].args[0]
         self.assertIn('--title=--item=other', args)
         self.assertEqual(args[1:3], ['save', '--show'])
         self.assertNotIn('--copy', args)
@@ -35,14 +38,12 @@ class BridgeTests(unittest.TestCase):
             bridge.dispatch({'operation': 'save', 'title': 'Test', 'password': 'existing'})
 
     def test_save_sensitive_copy_failure_preserves_saved_result(self):
-        responses = [b'{"password":"new-invented","id":"fake-id"}', bridge.Failure('failed'), b'other']
-        with patch.object(bridge, 'run', side_effect=responses) as run:
+        with patch.object(bridge, 'run', side_effect=[b'{"password":"new-invented","id":"fake-id"}', bridge.Failure('failed')]) as run:
             result = bridge.dispatch({'operation': 'save', 'title': 'Example', 'clearAfter': 0})
         self.assertEqual(result, {'password': 'new-invented', 'id': 'fake-id', 'copied': False})
-        self.assertNotIn('--copy', run.call_args_list[0].args[0])
         self.assertEqual(run.call_args_list[0].kwargs['timeout'], 120)
-        self.assertEqual(run.call_args_list[1].args, (['/usr/bin/wl-copy', '--sensitive'], b'new-invented'))
-        self.assertEqual(run.call_args_list[2].args[0], ['/usr/bin/wl-paste', '--no-newline'])
+        self.assertEqual(run.call_args_list[1].args, ([bridge.MINT, 'copy', '--json', '--clear-after', '0'], b'new-invented'))
+        self.assertEqual(run.call_count, 2)
 
     def test_save_invalid_delay_never_creates_item(self):
         with patch.object(bridge, 'run') as run:
@@ -60,38 +61,34 @@ class BridgeTests(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(bridge.Failure):
                 bridge.dispatch(request)
 
-    def test_copy_secret_only_stdin_and_sensitive(self):
-        with patch.object(bridge, 'run', return_value=b'') as run, patch.object(bridge.subprocess, 'Popen') as spawn, patch.object(bridge, 'handoff') as handoff:
-            bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
-        self.assertEqual(run.call_args.args, (['/usr/bin/wl-copy', '--sensitive'], b'invented-secret'))
-        self.assertFalse(run.call_args.kwargs['capture'])
-        self.assertNotIn('invented-secret', repr(spawn.call_args))
-        self.assertIn('-I', spawn.call_args.args[0])
-        self.assertIn('-S', spawn.call_args.args[0])
-        handoff.assert_called_once_with(spawn.return_value, b'invented-secret')
+    def test_copy_secret_only_stdin_through_mint(self):
+        with patch.object(bridge, 'run', return_value=b'{"copied":true,"clears_after":45}') as run:
+            result = bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
+        self.assertEqual(result, {'copied': True, 'clears_after': 45})
+        self.assertEqual(run.call_args.args, ([bridge.MINT, 'copy', '--json', '--clear-after', '45'], b'invented-secret'))
+        self.assertEqual(run.call_args.kwargs['timeout'], 35)
 
-    def test_zero_delay_does_not_start_clearer(self):
-        with patch.object(bridge, 'run', return_value=b'') as run, patch.object(bridge.subprocess, 'Popen') as spawn:
+    def test_zero_delay_uses_mint_policy(self):
+        with patch.object(bridge, 'run', return_value=b'{"copied":true,"clears_after":null}') as run:
             result = bridge.dispatch({'operation': 'copy', 'password': 'invented', 'clearAfter': 0})
         self.assertEqual(result, {'copied': True, 'clears_after': None})
-        self.assertEqual(run.call_args.args, (['/usr/bin/wl-copy', '--sensitive'], b'invented'))
-        spawn.assert_not_called()
+        self.assertEqual(run.call_args.args[0][-1], '0')
 
-    def test_sensitive_failure_has_no_unhinted_fallback(self):
-        with patch.object(bridge, 'run', side_effect=[bridge.Failure('failed'), b'other']) as run:
+    def test_sensitive_failure_has_no_fallback(self):
+        with patch.object(bridge, 'run', side_effect=bridge.Failure('failed')) as run:
             with self.assertRaises(bridge.Failure) as error:
                 bridge.dispatch({'operation': 'copy', 'password': 'invented'})
         self.assertEqual(error.exception.kind, 'clipboard')
-        self.assertEqual(run.call_count, 2)
-        self.assertEqual(run.call_args_list[1].args[0], ['/usr/bin/wl-paste', '--no-newline'])
+        self.assertEqual(run.call_count, 1)
 
-    def test_clear_only_if_unchanged(self):
-        for current, count in ((b'invented', 2), (b'changed', 1)):
-            with patch.object(bridge.time, 'sleep'), patch.object(bridge, 'run', side_effect=[current, b'']) as run:
-                bridge.clear_later(b'invented', 45)
-            self.assertEqual(run.call_count, count)
-            if count == 2:
-                self.assertEqual(run.call_args.args[0], ['/usr/bin/wl-copy', '--clear'])
+    def test_control_classes_rejected_before_commands(self):
+        controls = [0, 31, 127, 128, 159, 0x61c, 0x200e, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]
+        for code in controls:
+            for key in ('title', 'vault', 'url', 'username'):
+                with self.subTest(code=code, key=key), patch.object(bridge, 'run') as run:
+                    with self.assertRaises(bridge.Failure):
+                        bridge.dispatch({'operation': 'save', 'title': 'Example', key: 'a' + chr(code) + 'b'})
+                    run.assert_not_called()
 
     def test_bounded_stdout_and_stderr(self):
         for descriptor in (1, 2):
@@ -105,14 +102,6 @@ class BridgeTests(unittest.TestCase):
         started = time.monotonic()
         bridge.run(['/usr/bin/python3', '-I', '-S', '-c', code], b'invented', timeout=0.2, capture=False)
         self.assertLess(time.monotonic() - started, 0.2)
-
-    def test_clearer_handoff_timeout_reaps_child(self):
-        child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', '-c', 'import time; time.sleep(5)'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        with self.assertRaises(bridge.Failure) as error:
-            bridge.handoff(child, b'x' * 1048576, timeout=0.05)
-        self.assertEqual(error.exception.kind, 'timeout')
-        self.assertIsNotNone(child.poll())
-        self.assertTrue(child.stdin.closed)
 
     def test_timeout(self):
         with self.assertRaises(bridge.Failure) as error:
@@ -128,16 +117,33 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(error.exception.kind, 'failed')
         self.assertNotIn('secret', str(error.exception))
 
-    def test_external_stub_and_op_override(self):
+    def test_external_stub_with_test_only_source_substitution(self):
         with tempfile.TemporaryDirectory() as directory:
             stub = Path(directory) / 'stub'
             stub.write_text('#!/usr/bin/python3 -I\nimport json,sys\nassert sys.argv[1:]==["vault","list","--format","json"]\nprint(json.dumps([{"id":"fake-id","name":"Invented"}]))\n')
             stub.chmod(0o700)
-            proc = subprocess.run(['/usr/bin/python3', '-I', '-S', str(BRIDGE)],
-                                  input=b'{"operation":"vaults"}', stdout=subprocess.PIPE,
+            fixture = Path(directory) / 'bridge'
+            source = BRIDGE.read_text()
+            assignment = 'OP = "/usr/bin/op"'
+            self.assertEqual(source.count(assignment), 1, 'Test must replace exactly one production OP constant')
+            source = source.replace(assignment, 'OP = ' + repr(str(stub)))
+            self.assertNotIn('/usr/bin/op', source, 'Fixture must never retain the real op executable')
+            fixture.write_text(source)
+            proc = subprocess.run(['/usr/bin/python3', '-I', '-S', str(fixture)], input=b'{"operation":"vaults"}', stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, env={**os.environ, 'MINT_OP': str(stub)}, timeout=5)
         self.assertEqual(proc.stderr, b'')
         self.assertEqual(json.loads(proc.stdout), {'ok': True, 'data': [{'id': 'fake-id', 'name': 'Invented'}]})
+
+    def test_executable_overrides_ignored_and_resolved_op_forwarded(self):
+        with patch.dict(os.environ, {'MINT_OP': '/evil/op', 'MINT_BINARY': '/evil/mint', 'PATH': '/evil'}):
+            with patch.object(bridge, 'run', return_value=b'[]') as run:
+                bridge.dispatch({'operation': 'vaults'})
+            self.assertEqual(run.call_args.args[0][0], bridge.OP)
+            self.assertEqual(bridge.environment()['MINT_OP'], bridge.OP)
+            self.assertNotIn('MINT_BINARY', bridge.environment())
+            with patch.object(bridge, 'run', return_value=b'{"password":"fixture"}') as run:
+                bridge.dispatch({'operation': 'generate'})
+            self.assertEqual(run.call_args.args[0][0], '/usr/bin/mint')
 
     def test_malformed_command_json_has_no_secret(self):
         with patch.object(bridge, 'run', return_value=b'bad invented-secret'):
