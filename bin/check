@@ -6,6 +6,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/tests" -p 'test
 "$root/tools/check-agent-files"
 if [[ -d /usr/share/omarchy/shell ]]; then
   "$root/tests/check-qml"
+  "$root/tests/check-ui"
   omarchy plugin validate "$root"
   "$root/tools/lint-qml" "$root/BarWidget.qml" "$root/Panel.qml" "$root/Service.qml" "$root/Request.qml"
 fi

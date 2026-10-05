@@ -3,3 +3,5 @@ test('preferences clamp hostile settings and honor CLI strings',()=>{assert.equa
 test('password response needs bounded explicit metadata',()=>{assert.throws(()=>M.password({password:'x',length:1,entropy_bits:Infinity}));assert.throws(()=>M.password({password:'x\n',length:2,entropy_bits:1}));assert.equal(M.password({password:'<>&',length:3,entropy_bits:4}).password,'<>&')});
 test('metadata strips markup while option identity stays exact',()=>{assert.equal(M.clean('<b>abc&'), 'babc');assert.deepEqual(M.options([{name:'a&b'}],'preset'),[{value:'a&b',label:'ab'}])});
 test('oversized malformed responses fail closed',()=>{assert.throws(()=>M.parse('x'.repeat(65537)));assert.throws(()=>M.parse('{}'));assert.throws(()=>M.options(Array(257).fill({name:'x'}),'preset'))});
+
+test('default settings preserve exact identifiers',()=>{assert.equal(M.preferences({defaultPreset:'a&b',defaultVault:'a<b'}).defaultPreset,'a&b');assert.equal(M.preferences({defaultVault:'a<b'}).defaultVault,'a<b')});

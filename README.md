@@ -30,6 +30,14 @@
 - Linux clipboard clearing compares the current text before clearing; that comparison and clear are separate operations.
 - Clipboard history exclusion depends on the manager honoring the sensitive MIME hint.
 
+## Removal
+
+1. Run `omarchy plugin remove io.github.steveclarke.mint`.
+2. Run `omarchy restart shell`.
+
+- The Mint binaries and Hyprland binding are separate from the plugin.
+- The plugin stores no password files or account credentials.
+
 ## Development
 
 - `bin/check` runs model tests, stubbed helper tests and the agent-file guard.

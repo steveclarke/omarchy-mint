@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Instantiate the native panel and bar offscreen with a fixed preview service."""
+import os,shutil,subprocess,tempfile
+from pathlib import Path
+source=Path(__file__).resolve().parents[1]
+with tempfile.TemporaryDirectory(prefix='mint-ui-') as directory:
+ root=Path(directory)
+ for name in ('BarWidget.qml','Panel.qml','Service.qml','Request.qml','Model.js'):shutil.copyfile(source/name,root/name)
+ (root/'qs').mkdir()
+ for module in Path('/usr/share/omarchy/shell').iterdir():
+  if (module/'qmldir').is_file():(root/'qs'/module.name).symlink_to(module,target_is_directory=True)
+ runtime=root/'runtime';runtime.mkdir(mode=0o700)
+ (root/'shell.qml').write_text('''import QtQuick
+import Quickshell
+ShellRoot {
+ Service {id:service; demo:true}
+ QtObject {id:host; function serviceFor(name) {return service}}
+ QtObject {id:hostBar; property var shell:host; property bool vertical:false; property string position:"top"; property int barSize:32; property color foreground:"#dddddd"; property color barForeground:foreground; property color background:"#222222"; property color urgent:"#ff0000"; property var activePopout:null; property var clickTargets:[]; function requestPopout(item) {activePopout=item} function releasePopout(item) {activePopout=null} }
+ Item {width:600;height:600;BarWidget {id:widget;bar:hostBar}}
+ Timer {interval:400;running:true;onTriggered:{if(widget.service!==service || widget.implicitWidth<=0 || widget.implicitHeight<=0) Qt.exit(2);else {console.log("UI_PASS");Qt.quit()}}}
+}''')
+ env=dict(os.environ,QT_QPA_PLATFORM='offscreen',QT_QPA_PLATFORMTHEME='',QML_IMPORT_PATH=str(root),XDG_RUNTIME_DIR=str(runtime),MINT_OP='/usr/bin/false');env.pop('WAYLAND_DISPLAY',None);env.pop('DISPLAY',None)
+ r=subprocess.run(['/usr/bin/quickshell','-p',str(root/'shell.qml')],env=env,capture_output=True,text=True,timeout=5)
+ output=r.stdout+r.stderr
+ if r.returncode or 'UI_PASS' not in output or any(x in output for x in ('TypeError','ReferenceError','Failed to load','Cannot assign','is not a type','not available')):
+  print(output);raise SystemExit(1)
+ print('Native bar and panel instantiate offscreen: PASS')

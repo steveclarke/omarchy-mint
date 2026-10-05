@@ -1,6 +1,7 @@
 function clean(value, cap) { return typeof value === 'string' ? value.replace(/[<>&\x00-\x1f\x7f]/g, '').slice(0, cap || 160) : '' }
 function integer(value, fallback, min, max) { var n = Number(value); return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback }
-function preferences(entry) { return {clearAfter: integer(entry.clearAfter,45,0,3600), defaultPreset: clean(entry.defaultPreset,80), defaultVault: clean(entry.defaultVault,120)} }
+function identity(value, cap) { return typeof value === 'string' && value.length <= cap && !/[\x00-\x1f\x7f]/.test(value) ? value : '' }
+function preferences(entry) { return {clearAfter: integer(entry.clearAfter,45,0,3600), defaultPreset: identity(entry.defaultPreset,80), defaultVault: identity(entry.defaultVault,120)} }
 function parse(raw) {
   if (typeof raw !== 'string' || raw.length > 65536) throw Error('size')
   var doc = JSON.parse(raw)

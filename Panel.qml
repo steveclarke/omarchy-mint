@@ -5,7 +5,6 @@ import Quickshell
 import qs.Commons
 import qs.Ui
 import qs.Ui as Ui
-import "Model.js" as Model
 
 Panel {
   id: root
@@ -21,7 +20,8 @@ Panel {
   readonly property color ink: Color.popups.text
   readonly property color dim: Qt.darker(ink, 1.35)
   function back() {
-    if (page === "save" && service && service.busy) service.cancel();
+    if (page === "save" && service && service.busy)
+      service.cancel();
     page = "main";
     revealed = false;
     keys.forceActiveFocus();
@@ -117,6 +117,7 @@ Panel {
             }
             trailingControl: Component {
               Ui.PanelActionButton {
+                focusable: true
                 iconText: root.page === "main" ? "󰒓" : "󰅁"
                 foreground: root.ink
                 tooltipText: root.page === "main" ? "Settings" : "Back"
