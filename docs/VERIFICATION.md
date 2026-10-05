@@ -1,47 +1,35 @@
 # Verification
 
-- Mint base: merged `main`, `f9ed322`.
-- Core and CLI tests: 33 passed with `MINT_OP=/usr/bin/false`.
-- Linux release: CLI and Tauri window compiled on Arch Linux.
-- Installed CLI and window hashes matched build outputs.
-- Clipboard proof: copied password hash absent from 289 Quattro text entries; existing entry matched as the reader's positive control.
-- Clipboard offers `x-kde-passwordManagerHint`; five-second conditional clear passed.
-- 1Password proof: item-list preflight failed with authorization prompt dismissed; no item created. Save/delete proof remains untested.
-- UI review: first-party layout retained; save action explicitly creates a different password; uncertain outcomes require checking 1Password.
-- Bridge: 18 stub tests passed, including bounded output, pipe-only secrets and no sensitive-copy fallback after save.
-- Model: five tests cover malformed responses, metadata limits, settings bounds and exact preset identity.
-- Offscreen Quickshell: eight cases pass, including actual request I/O, malformed/oversized streams, cancellation, generation/presets, preview isolation and panel ownership.
-- Native bar and panel instantiate offscreen against installed first-party components; visual and keyboard behavior remains unverified.
-- Real bridge: generated password and clipboard matched; three-second conditional clear passed.
-- Linux toggle fix: the same window address cycles shown, absent, shown; keyboard focus remains untested while locked.
-- Super+Ctrl+M: bound in dotfiles; reload reports no configuration errors.
-- Plugin installed from its public Git URL and enabled; active=false pending shell restart after unlock.
-- Live multi-monitor, keyboard and light/dark panel captures remain untested while the desktop is locked.
-- Local manifest validation and QML lint passed.
-- Local marketplace static detection reported no findings; remote exact-commit review remains unperformed.
+## Installed proof — 2026-10-05
 
-## Open verification
+- Installed plugin: normal default-branch update to `5da19ca6f471f425da905820b2637d37f9b2292d`, followed by Omarchy shell restart.
+- Engine: Arch package `mint 0.1.0-2`, compiled in a clean chroot from release merge `0c4aed5bf5e195b2f08421b012e9d64c358eb414`.
+- Package: both binaries, desktop entry and icon have verified pacman ownership and match the package byte for byte; obsolete local binaries are removed through trash.
+- Package checks: 47 tests pass with two Cargo jobs and the 1Password stub. Namcap has no errors or implicit-dependency warnings; four retained runtime-dependency warnings have documented uses.
+- [Arch packaging evidence](https://github.com/steveclarke/mint/pull/5) records the package contents, checksum and retained warnings.
+- Native Wayland class: `mint-app`, matching `StartupWMClass`; X11 `WM_CLASS` does not apply to this native Wayland run.
+- Super+Ctrl+M: five physical-key hide/show transitions pass, with focus on each show and the same application process throughout.
+- Native captures: ten stand-in service states and the save form in both the active light palette and the stock Catppuccin dark palette; normal generation, copied state and settings also have installed captures.
+- Monitors: the native bar opens the panel on both 2880 × 1620 logical displays.
+- Preview: actual installed panel in normal operation, masked generated password, no demo banner; all four borders inspected at zoom.
+- Theme cleanup: the runtime theme API restores the exact original palette; theme files remain unchanged.
+- Clipboard: native panel Copy advertises the sensitive MIME hint; its hash is absent from 289 text-history entries. An existing-entry positive control and an injected in-memory match both pass.
+- Auto-clear: clipboard becomes empty after 44.78 seconds under the default 45-second setting; panel closure discards its password.
+- Test cleanup: temporary input devices are closed, pointer position restored, clipboard empty, and panel state idle with demo off and no retained password.
+- Scope: smaller-screen runtime fit remains untested.
 
-- [Unlocked desktop checks](https://github.com/steveclarke/omarchy-mint/issues/1), dated 2026-10-05.
-- [Real save and cleanup proof](https://github.com/steveclarke/omarchy-mint/issues/2), dated 2026-10-05.
-- [Linux toggle and Arch packaging](https://github.com/steveclarke/mint/pull/4): source readiness is independent of pending installation proof.
+## Source checks
 
-## Review repair evidence — 2026-10-05
-
-- Mint source: `4d545c8`; shared stdin copy, fixed Wayland executable paths, bounded I/O and acknowledged clearer startup.
-- Bridge: 18 stubbed tests pass; no production executable override hooks.
+- Bridge: 22 stubbed tests pass, including bounded output, pipe-only secrets, executable resolution, copy error classes and malformed responses.
 - Model: six tests pass, including DEL, C1 and bidi controls across labels, identities and passwords.
-- Offscreen Quickshell: 11 cases pass, including busy-preview refusal, cancelled-save uncertainty and preview-state cycling.
-- Native component loading, manifest validation and QML lint pass.
-- Grep audit: runtime text sinks explicitly use PlainText; host labels use fixed or cleaned strings; output collection and filesystem-write hits belong to test/tooling code. No network or privilege-command matches in the scanned plugin tree.
-- Preview: the existing 612 × 757 capture contains the demo banner. The final capture from the live installed panel without the banner remains pending installation.
-- Installed repair, package/chroot proof, full live-state sweep and real-item save/delete proof remain pending.
+- Offscreen Quickshell: 11 cases pass, including actual request I/O, oversized streams, cancellation, panel ownership, busy-preview refusal and cancelled-save uncertainty.
+- Native component loading, manifest validation, QML lint and repository hygiene pass.
+- Automated test commands set `MINT_OP=/usr/bin/false`; stand-in panel states cannot invoke vault operations.
+- Runtime text sinks explicitly use PlainText; host labels are fixed or cleaned. Output collection and filesystem-write matches belong to test/tooling code.
+- Prior runtime-source marketplace baseline: `23a0360f76ff442702b65be03d0ed9fe07de2bb0`, passed with no findings or capabilities. Updated evidence commits require their own exact-commit baseline.
 
-## Source follow-up evidence — 2026-10-05
+## Real-account proof
 
-- Copy failures retain the bridge's missing-command, timeout, overflow, process-failure and response classes. Mint JSON stderr contributes only known kind/exit-code pairs; messages are fixed, with no stderr or secret echo.
-- Bridge: 22 stubbed tests pass, including missing Mint, all copy failure classes, malformed success responses and hostile JSON stderr.
-- Model: six tests pass. Offscreen Quickshell: 11 cases pass; native components, manifest validation and QML lint pass.
-- Grep audit: every git-tracked file is scanned, with positive controls and no depth or size exclusions. QML text sinks have explicit formats; host labels are fixed or cleaned. Filesystem-write and whole-output collection matches belong to tests and tooling. Network and privilege patterns have no matches in this scope.
-- Final preview: pending installation; the existing demo-banner capture does not satisfy the final-preview requirement.
-- Installation proof: package/chroot checks, StartupWMClass, updated-plugin live states and real-item save/delete remain pending.
+- [Save and cleanup follow-up](https://github.com/steveclarke/omarchy-mint/issues/2), dated 2026-10-05: the deliberate proof stops at the duplicate-title search because desktop authorization is dismissed.
+- Creation attempts: zero. No item is created, no deletion is required, and no password reaches logs or captures.
+- Remaining proof: one installed panel-path save of `mint test (delete me)` in Employee, immediate deletion, and verified absence.
