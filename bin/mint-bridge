@@ -20,7 +20,10 @@ MESSAGES = {
     'timeout': 'The command took too long.',
     'overflow': 'The command returned too much data.',
     'failed': 'The command failed. Check its installation and permissions.',
-    'clipboard': 'Sensitive clipboard copy failed. wl-clipboard 2.3 or later is required.',
+    'clipboard': 'Sensitive clipboard copy failed. Check the Wayland session and wl-clipboard 2.3 or later.',
+    'usage': 'Mint rejected the copy input or settings. Check the clipboard settings and try again.',
+    'unsatisfiable': 'Mint could not satisfy the password rules. Change the rules and try again.',
+    'onepassword': '1Password failed. Check its installation and approval, then try again.',
     'response': 'The command returned an invalid response.',
 }
 
@@ -37,7 +40,7 @@ def environment():
     return env
 
 
-def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
+def run(argv, payload=b'', timeout=TIMEOUT, capture=True, mint_errors=False):
     """Drain at most LIMIT+1 bytes per stream; deadline includes stdin writes."""
     try:
         output = subprocess.PIPE if capture else subprocess.DEVNULL
@@ -90,6 +93,8 @@ def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
         except subprocess.TimeoutExpired:
             raise Failure('timeout')
         if code:
+            if mint_errors:
+                raise Failure(mint_failure(buffers['err'], code))
             raise Failure('failed')
         completed = True
         return bytes(buffers['out'])
@@ -104,6 +109,21 @@ def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
         for pipe in (proc.stdin, proc.stdout, proc.stderr):
             if pipe is not None:
                 pipe.close()
+
+
+def mint_failure(raw, code):
+    """Only a known kind/code pair crosses the boundary; stderr text never does."""
+    try:
+        error = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        return 'failed'
+    kinds = {'usage': 2, 'unsatisfiable': 3, 'onepassword': 4, 'clipboard': 5}
+    if not isinstance(error, dict):
+        return 'failed'
+    kind = error.get('kind')
+    if isinstance(kind, str) and kind in kinds and type(error.get('code')) is int and error['code'] == code == kinds[kind]:
+        return kind
+    return 'failed'
 
 
 def text_field(request, name, maximum=256, required=False):
@@ -176,10 +196,8 @@ def dispatch(request):
     if operation == 'copy':
         secret = text_field(request, 'password', 4096, True).encode('utf-8')
         seconds = delay(request)
-        try:
-            result = parse(run([MINT, 'copy', '--json', '--clear-after', str(seconds)], secret, timeout=COPY_TIMEOUT))
-        except Failure:
-            raise Failure('clipboard')
+        result = parse(run([MINT, 'copy', '--json', '--clear-after', str(seconds)], secret,
+                           timeout=COPY_TIMEOUT, mint_errors=True))
         if not isinstance(result, dict) or result.get('copied') is not True or result.get('clears_after') != (seconds or None):
             raise Failure('response')
         return result

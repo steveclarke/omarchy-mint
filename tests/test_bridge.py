@@ -78,8 +78,52 @@ class BridgeTests(unittest.TestCase):
         with patch.object(bridge, 'run', side_effect=bridge.Failure('failed')) as run:
             with self.assertRaises(bridge.Failure) as error:
                 bridge.dispatch({'operation': 'copy', 'password': 'invented'})
-        self.assertEqual(error.exception.kind, 'clipboard')
+        self.assertEqual(error.exception.kind, 'failed')
         self.assertEqual(run.call_count, 1)
+
+    def test_copy_preserves_bridge_failure_classes(self):
+        kinds = ('missing', 'timeout', 'overflow', 'failed', 'response', 'clipboard',
+                 'usage', 'unsatisfiable', 'onepassword')
+        for kind in kinds:
+            with self.subTest(kind=kind), patch.object(bridge, 'run', side_effect=bridge.Failure(kind)) as run:
+                with self.assertRaises(bridge.Failure) as error:
+                    bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
+                self.assertEqual(error.exception.kind, kind)
+                self.assertTrue(run.call_args.kwargs['mint_errors'])
+                self.assertEqual(run.call_count, 1)
+        self.assertEqual(len({bridge.MESSAGES[kind] for kind in kinds}), len(kinds))
+        self.assertNotIn('wl-clipboard', bridge.MESSAGES['missing'])
+
+    def test_copy_invalid_success_response_is_distinct(self):
+        for raw in (b'invented-secret', b'{}', b'{"copied":false}', b'{"copied":true,"clears_after":99}'):
+            with self.subTest(raw=raw), patch.object(bridge, 'run', return_value=raw):
+                with self.assertRaises(bridge.Failure) as error:
+                    bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
+                self.assertEqual(error.exception.kind, 'response')
+                self.assertNotIn('invented-secret', str(error.exception))
+
+    def test_mint_json_stderr_maps_only_known_kind_code_pairs(self):
+        for kind, code in (('usage', 2), ('unsatisfiable', 3), ('onepassword', 4), ('clipboard', 5)):
+            with self.subTest(kind=kind):
+                raw = json.dumps({'kind': kind, 'code': code, 'error': 'invented-secret <img>'})
+                command = ['/usr/bin/python3', '-I', '-S', '-c',
+                           'import sys; sys.stderr.write(sys.stdin.read()); sys.exit(int(sys.argv[1]))', str(code)]
+                with self.assertRaises(bridge.Failure) as error:
+                    bridge.run(command, raw.encode(), mint_errors=True)
+                self.assertEqual(error.exception.kind, kind)
+                self.assertNotIn('invented-secret', str(error.exception))
+                self.assertNotIn('invented-secret', bridge.MESSAGES[error.exception.kind])
+        for raw in (b'[]', b'invented-secret', b'{"kind":[],"code":5}',
+                    b'{"kind":"invented-secret","code":5}', b'{"kind":"clipboard","code":2}',
+                    b'{"kind":"clipboard","code":true}', b'{"kind":"clipboard","code":5.0}'):
+            self.assertEqual(bridge.mint_failure(raw, 5), 'failed')
+        self.assertEqual(bridge.mint_failure(b'{"kind":"clipboard","code":5}', 2), 'failed')
+
+    def test_missing_mint_copy_runs_no_clipboard_fallback(self):
+        with patch.object(bridge, 'MINT', '/nonexistent/mint-test/mint'):
+            with self.assertRaises(bridge.Failure) as error:
+                bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
+        self.assertEqual(error.exception.kind, 'missing')
 
     def test_control_classes_rejected_before_commands(self):
         controls = [0, 31, 127, 128, 159, 0x61c, 0x200e, 0x200f, 0x202a, 0x202e, 0x2066, 0x2069]
