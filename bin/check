@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root=$(dirname "$(dirname "$(realpath "$0")")")
-node --test "$root/tests/model.test.cjs"
+node "$root/tests/model.test.cjs"
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s "$root/tests" -p 'test_*.py'
 "$root/tools/check-agent-files"
 if [[ -d /usr/share/omarchy/shell ]]; then
+  "$root/tests/check-qml"
   omarchy plugin validate "$root"
   "$root/tools/lint-qml" "$root/BarWidget.qml" "$root/Panel.qml" "$root/Service.qml" "$root/Request.qml"
 fi

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -60,13 +61,14 @@ class BridgeTests(unittest.TestCase):
                 bridge.dispatch(request)
 
     def test_copy_secret_only_stdin_and_sensitive(self):
-        with patch.object(bridge, 'run', return_value=b'') as run, patch.object(bridge.subprocess, 'Popen') as spawn:
+        with patch.object(bridge, 'run', return_value=b'') as run, patch.object(bridge.subprocess, 'Popen') as spawn, patch.object(bridge, 'handoff') as handoff:
             bridge.dispatch({'operation': 'copy', 'password': 'invented-secret'})
         self.assertEqual(run.call_args.args, (['/usr/bin/wl-copy', '--sensitive'], b'invented-secret'))
+        self.assertFalse(run.call_args.kwargs['capture'])
         self.assertNotIn('invented-secret', repr(spawn.call_args))
         self.assertIn('-I', spawn.call_args.args[0])
         self.assertIn('-S', spawn.call_args.args[0])
-        spawn.return_value.stdin.write.assert_called_once_with(b'invented-secret')
+        handoff.assert_called_once_with(spawn.return_value, b'invented-secret')
 
     def test_zero_delay_does_not_start_clearer(self):
         with patch.object(bridge, 'run', return_value=b'') as run, patch.object(bridge.subprocess, 'Popen') as spawn:
@@ -97,6 +99,20 @@ class BridgeTests(unittest.TestCase):
                 bridge.run(['/usr/bin/python3', '-I', '-S', '-c',
                             f'import os; os.write({descriptor}, b"x" * 100000)'])
             self.assertEqual(error.exception.kind, 'overflow')
+
+    def test_detached_clipboard_owner_does_not_hold_response_pipes(self):
+        code = 'import os,time; os.read(0,4096); child=os.fork(); time.sleep(0.5) if child == 0 else None; os._exit(0)'
+        started = time.monotonic()
+        bridge.run(['/usr/bin/python3', '-I', '-S', '-c', code], b'invented', timeout=0.2, capture=False)
+        self.assertLess(time.monotonic() - started, 0.2)
+
+    def test_clearer_handoff_timeout_reaps_child(self):
+        child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', '-c', 'import time; time.sleep(5)'], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        with self.assertRaises(bridge.Failure) as error:
+            bridge.handoff(child, b'x' * 1048576, timeout=0.05)
+        self.assertEqual(error.exception.kind, 'timeout')
+        self.assertIsNotNone(child.poll())
+        self.assertTrue(child.stdin.closed)
 
     def test_timeout(self):
         with self.assertRaises(bridge.Failure) as error:

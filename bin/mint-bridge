@@ -50,11 +50,12 @@ def binary(key, default):
     return value
 
 
-def run(argv, payload=b'', timeout=TIMEOUT):
+def run(argv, payload=b'', timeout=TIMEOUT, capture=True):
     """Drain at most LIMIT+1 bytes per stream; deadline includes stdin writes."""
     try:
-        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=environment(), start_new_session=True)
+        output = subprocess.PIPE if capture else subprocess.DEVNULL
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=output,
+                                stderr=output, env=environment(), start_new_session=True)
     except FileNotFoundError:
         raise Failure('missing')
     except OSError:
@@ -64,6 +65,8 @@ def run(argv, payload=b'', timeout=TIMEOUT):
     deadline = time.monotonic() + timeout
     pending = memoryview(payload)
     for pipe, name in ((proc.stdout, 'out'), (proc.stderr, 'err')):
+        if pipe is None:
+            continue
         os.set_blocking(pipe.fileno(), False)
         selector.register(pipe, selectors.EVENT_READ, name)
     if pending:
@@ -112,7 +115,8 @@ def run(argv, payload=b'', timeout=TIMEOUT):
                 pass
             proc.wait()
         for pipe in (proc.stdin, proc.stdout, proc.stderr):
-            pipe.close()
+            if pipe is not None:
+                pipe.close()
 
 
 def text_field(request, name, maximum=256, required=False):
@@ -175,27 +179,54 @@ def parse(raw):
 def clear_later(secret, seconds):
     time.sleep(seconds)
     if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
-        run(['/usr/bin/wl-copy', '--clear'])
+        run(['/usr/bin/wl-copy', '--clear'], capture=False)
+
+
+def handoff(proc, payload, timeout=5):
+    """Bound the detached clearer's stdin handoff and reap it on cancellation."""
+    completed = False
+    pending = memoryview(payload)
+    deadline = time.monotonic() + timeout
+    try:
+        os.set_blocking(proc.stdin.fileno(), False)
+        with selectors.DefaultSelector() as selector:
+            selector.register(proc.stdin, selectors.EVENT_WRITE)
+            while pending:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise Failure('timeout')
+                pending = pending[os.write(proc.stdin.fileno(), pending[:4096]):]
+        proc.stdin.close()
+        if proc.poll() not in (None, 0):
+            raise Failure('clipboard')
+        completed = True
+    finally:
+        proc.stdin.close()
+        if not completed:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            proc.wait()
 
 
 def copy_password(request):
     secret = text_field(request, 'password', 4096, True).encode('utf-8')
     seconds = delay(request)
     try:
-        run(['/usr/bin/wl-copy', '--sensitive'], secret)
+        run(['/usr/bin/wl-copy', '--sensitive'], secret, capture=False)
         if seconds == 0:
             return {'copied': True, 'clears_after': None}
         child = subprocess.Popen(['/usr/bin/python3', '-I', '-S', os.path.abspath(__file__),
                                   '__clear', str(seconds)], stdin=subprocess.PIPE,
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                  env=environment(), start_new_session=True)
-        with child.stdin:
-            child.stdin.write(secret)
+        handoff(child, secret)
     except (Failure, OSError):
         # An unscheduled secret is removed only while it is still the same value.
         try:
             if run(['/usr/bin/wl-paste', '--no-newline']) == secret:
-                run(['/usr/bin/wl-copy', '--clear'])
+                run(['/usr/bin/wl-copy', '--clear'], capture=False)
         except Failure:
             pass
         raise Failure('clipboard')
